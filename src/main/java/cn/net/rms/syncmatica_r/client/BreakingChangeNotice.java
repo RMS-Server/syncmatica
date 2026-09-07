@@ -1,14 +1,17 @@
 package cn.net.rms.syncmatica_r.client;
 
 import cn.net.rms.syncmatica_r.Syncmatica;
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.tree.RootCommandNode;
 //#if MC >= 260100
 //$$ import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
-//$$ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+//$$ import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 //#elseif MC >= 12001
 //$$ import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
-//$$ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+//$$ import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 //#else
 import net.fabricmc.fabric.api.client.command.v1.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v1.FabricClientCommandSource;
 //#endif
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.ClickEvent;
@@ -36,13 +39,15 @@ public final class BreakingChangeNotice {
 
     public static void initialize() {
         PREFERENCES.load();
-        registerDismissCommand();
     }
 
     public static void showIfNeeded(final MinecraftClient client) {
         final String version = BREAKING_CHANGE_VERSION;
-        if (client == null || client.player == null
-                || PREFERENCES.isDismissed(noticeIdForVersion(version))) {
+        if (client == null || client.player == null) {
+            return;
+        }
+        ensureDismissCommandRegistered();
+        if (PREFERENCES.isDismissed(noticeIdForVersion(version))) {
             return;
         }
         sendChatMessage(client, createMessage(version));
@@ -121,23 +126,42 @@ public final class BreakingChangeNotice {
 //#endif
     }
 
-    private static void registerDismissCommand() {
-//#if MC >= 12001
-//$$         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) ->
-//$$                 dispatcher.register(
+    /**
+     * Attaches the dismiss command to the active client command dispatcher on demand.
+     *
+     * <p>The command is registered lazily instead of through
+     * {@code ClientCommandRegistrationCallback} for two reasons: registering anything
+     * through the callback makes Fabric API install its own {@code /fcc} helper
+     * commands into the suggestion list, and the hidden node keeps the dismiss command
+     * executable through the chat click event while never appearing in completion.</p>
+     */
+    private static void ensureDismissCommandRegistered() {
+        final CommandDispatcher<FabricClientCommandSource> dispatcher;
 //#if MC >= 260100
-//$$                         ClientCommands.literal(DISMISS_COMMAND)
+//$$         dispatcher = ClientCommands.getActiveDispatcher();
+//#elseif MC >= 12001
+//$$         dispatcher = ClientCommandManager.getActiveDispatcher();
 //#else
-//$$                         ClientCommandManager.literal(DISMISS_COMMAND)
+        dispatcher = ClientCommandManager.DISPATCHER;
 //#endif
-//$$                                 .executes(context -> dismiss())
-//$$                 )
-//$$         );
-//#else
-        ClientCommandManager.DISPATCHER.register(
-                ClientCommandManager.literal(DISMISS_COMMAND).executes(context -> dismiss())
-        );
-//#endif
+        if (dispatcher == null) {
+            return;
+        }
+        final RootCommandNode<FabricClientCommandSource> root = dispatcher.getRoot();
+        if (root.getChild(DISMISS_COMMAND) != null) {
+            return;
+        }
+        root.addChild(new HiddenLiteralCommandNode<>(
+                DISMISS_COMMAND,
+                context -> {
+                    dismiss();
+                    return 1;
+                },
+                source -> true,
+                null,
+                null,
+                false
+        ));
     }
 
     private static int dismiss() {
