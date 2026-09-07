@@ -245,11 +245,19 @@ tasks.named("shadowJar") {
 }
 
 if (unobfuscated) {
-    tasks.named("jar") {
-        dependsOn tasks.named("shadowJar")
-        from(zipTree(tasks.named("shadowJar").get().archiveFile))
+    // Shadow's relocation happens in shadowJar; the plain jar task repackages unrelocated
+    // project classes next to relocated dependencies, which breaks at runtime with
+    // NoClassDefFoundError. Publish the shadowJar output directly as the release jar.
+    tasks.named("jar") { enabled = false }
+    tasks.named("shadowJar") {
         archiveClassifier.set("")
-        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        destinationDirectory = layout.buildDirectory.dir("libs")
+        from(rootProject.file("LICENSE")) {
+            rename { "${it}_${base.archivesName.get()}" }
+        }
+    }
+    tasks.named("build") {
+        dependsOn tasks.named("shadowJar")
     }
 } else {
     tasks.named("remapJar") {
@@ -269,7 +277,7 @@ publishing {
     publications {
         mavenJava(MavenPublication) {
             if (unobfuscated) {
-                artifact(jar) { builtBy jar }
+                artifact(shadowJar) { builtBy shadowJar }
             } else {
                 artifact(remapJar) { builtBy remapJar }
             }
