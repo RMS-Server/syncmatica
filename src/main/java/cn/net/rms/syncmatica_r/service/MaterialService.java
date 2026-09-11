@@ -941,20 +941,49 @@ public class MaterialService extends AbstractService {
         }
     }
 
+    /**
+     * Builds the sign-text alias table for the default stocking area scan. Each
+     * placement answers to both its embedded display name and the file name it
+     * was shared under; both aliases resolve to the display name because that
+     * is the key {@link #applyDefaultScanResults} looks totals up by. Display
+     * names win over file names on collision, so an embedded name cannot be
+     * shadowed by another placement's file name.
+     */
+    static Map<String, String> buildPlacementAliases(final Collection<ServerPlacement> placements) {
+        final Map<String, String> aliases = new HashMap<>();
+        for (final ServerPlacement placement : placements) {
+            final String canonical = placement.getName();
+            if (canonical != null && !canonical.isEmpty()) {
+                aliases.put(canonical, canonical);
+            }
+        }
+        for (final ServerPlacement placement : placements) {
+            final String fileName = placement.getFileName();
+            if (fileName == null || fileName.isEmpty()) {
+                continue;
+            }
+            final String canonical = aliases.get(fileName);
+            if (canonical == null) {
+                aliases.put(fileName, placement.getName());
+            } else {
+                aliases.put(fileName, canonical);
+            }
+        }
+        return aliases;
+    }
+
     private final class DefaultStockingScanState {
         private final ServerWorld world;
         private final Iterator<BlockPos> iterator;
         private final Map<String, Map<MaterialKey, Integer>> totals = new HashMap<>();
         private final Map<String, Set<BlockPos>> scannedContainers = new HashMap<>();
-        private final Set<String> knownPlacementNames = new HashSet<>();
+        private final Map<String, String> placementAliases;
         private boolean finished;
         private boolean hasLoadedChunks;
 
         DefaultStockingScanState(final ServerWorld world, final StockingAreaDefinition area) {
             this.world = world;
-            for (final ServerPlacement placement : placements.values()) {
-                knownPlacementNames.add(placement.getName());
-            }
+            this.placementAliases = buildPlacementAliases(placements.values());
             if (world == null || area == null || !isStockingAreaAllowed(area)) {
                 iterator = Collections.emptyIterator();
                 finished = true;
@@ -1011,7 +1040,8 @@ public class MaterialService extends AbstractService {
                     continue;
                 }
                 final java.util.List<String> names = readSignNames(sign);
-                names.removeIf(name -> !knownPlacementNames.contains(name));
+                names.replaceAll(placementAliases::get);
+                names.removeIf(Objects::isNull);
                 if (names.isEmpty()) {
                     continue;
                 }
